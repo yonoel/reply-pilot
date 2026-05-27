@@ -1,0 +1,8 @@
+node_modules/
+.env
+prompt.md
+.reply-pilot/
+.lark-bridge/
+.DS_Store
+coverage/
+data/

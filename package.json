@@ -1,0 +1,22 @@
+{
+  "name": "reply-pilot",
+  "description": "A local Lark message copilot CLI that drafts replies and waits for human confirmation before sending.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/cli.js watch",
+    "cli": "node src/cli.js",
+    "watch": "node src/cli.js watch",
+    "poll-once": "node src/cli.js poll-once",
+    "test": "npm run typecheck && node --test tests/**/*.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3"
+  }
+}
