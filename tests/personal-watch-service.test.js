@@ -183,6 +183,87 @@ test("PersonalWatchService hot reloads target listeners before each poll", async
   );
 });
 
+test("PersonalWatchService hot reloads bridge before drafting", async () => {
+  const notifications = [];
+  const handled = [];
+  const store = new MemoryApprovalStore();
+  let now = new Date("2026-05-27T10:00:00+08:00");
+  let bridge = {
+    async handleLarkMessage(message) {
+      handled.push(["hermes", message.text]);
+      return { text: `hermes：${message.text}`, channel: "hermes" };
+    }
+  };
+  const messages = [
+    {
+      messageId: "om-1",
+      createdAt: "1779847200000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "第一条"
+    },
+    {
+      messageId: "om-2",
+      createdAt: "1779847210000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "第二条"
+    }
+  ];
+  let pollIndex = 0;
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages(request) {
+        if (request.pageSize === 20) {
+          return [messages[Math.min(pollIndex - 1, messages.length - 1)]].filter(Boolean);
+        }
+        const message = messages[pollIndex];
+        pollIndex += 1;
+        return message ? [message] : [];
+      },
+      async sendText(message) {
+        notifications.push(message);
+        return { message_id: `om-notify-${notifications.length}` };
+      }
+    },
+    bridge,
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 0
+    },
+    configProvider() {
+      return {
+        targetListeners: [{ chatId: "oc-chat" }],
+        selfUserId: "ou-me",
+        lookbackMinutes: 10,
+        quietWindowSeconds: 0,
+        bridge
+      };
+    },
+    now: () => now
+  });
+
+  await service.pollOnce();
+  bridge = {
+    async handleLarkMessage(message) {
+      handled.push(["ollama", message.text]);
+      return { text: `ollama：${message.text}`, channel: "ollama" };
+    }
+  };
+  now = new Date("2026-05-27T10:00:20+08:00");
+  await service.pollOnce();
+
+  assert.deepEqual(handled, [
+    ["hermes", "第一条"],
+    ["ollama", "第二条"]
+  ]);
+  assert.match(notifications[0].text, /hermes：第一条/);
+  assert.match(notifications[1].text, /ollama：第二条/);
+});
+
 test("PersonalWatchService coalesces continuous chat messages and drafts once with context", async () => {
   const notifications = [];
   const handled = [];

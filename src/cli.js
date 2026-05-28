@@ -344,16 +344,7 @@ function createWatchService(config, io) {
   }
 
   const store = createStore(config, io.cwd);
-  const channelType = config.channel.type;
-  const channel = createAgentChannel({
-    ...config.channel,
-    [channelType]: {
-      ...config.channel[channelType],
-      promptTemplate: readPromptTemplate(config, io.cwd),
-      persona: config.prompt?.persona ?? ""
-    }
-  });
-  const bridge = createAgentBridge({ channel });
+  const bridge = createBridge(config, io);
   const imClient = new LarkCliImClient({
     runCommand: io.runCommand
   });
@@ -366,8 +357,28 @@ function createWatchService(config, io) {
     contactClient,
     bridge,
     config: personalWatchConfig(config),
-    configProvider: () => personalWatchConfig(loadProjectConfig({ cwd: io.cwd }))
+    configProvider: () => {
+      const nextConfig = loadProjectConfig({ cwd: io.cwd });
+      validateRuntimeConfig(nextConfig);
+      return {
+        ...personalWatchConfig(nextConfig),
+        bridge: createBridge(nextConfig, io)
+      };
+    }
   });
+}
+
+function createBridge(config, io) {
+  const channelType = config.channel.type;
+  const channel = createAgentChannel({
+    ...config.channel,
+    [channelType]: {
+      ...config.channel[channelType],
+      promptTemplate: readPromptTemplate(config, io.cwd),
+      persona: config.prompt?.persona ?? ""
+    }
+  });
+  return createAgentBridge({ channel });
 }
 
 function createConfirmationEventSource(service, io) {

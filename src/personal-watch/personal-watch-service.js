@@ -105,7 +105,11 @@ export class PersonalWatchService {
     if (!this.configProvider) {
       return;
     }
-    const nextConfig = normalizeConfig(await this.configProvider());
+    const provided = await this.configProvider();
+    if (provided?.bridge) {
+      this.bridge = provided.bridge;
+    }
+    const nextConfig = normalizeConfig(provided?.config ?? provided);
     const previousKeys = new Set(this.config.targetListeners.map(listenerKey));
     const nextKeys = new Set(nextConfig.targetListeners.map(listenerKey));
     const added = [...nextKeys].filter((key) => !previousKeys.has(key));
