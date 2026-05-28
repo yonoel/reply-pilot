@@ -1,4 +1,7 @@
 export function buildAgentPrompt(request) {
+  if (request.task === "context-summary") {
+    return buildContextSummaryPrompt(request);
+  }
   if (request.promptTemplate) {
     return renderTemplate(request.promptTemplate, request);
   }
@@ -29,6 +32,32 @@ export function buildAgentPrompt(request) {
   }
 
   return lines.join("\n");
+}
+
+function buildContextSummaryPrompt(request) {
+  const conversation = request.conversation ?? {};
+  const metadata = request.metadata ?? {};
+  const context = formatContextMessages(request.contextMessages ?? [], conversation.selfUserId, request.contextMaxChars);
+  return [
+    "You are summarizing a Lark conversation for the message owner.",
+    "Write a concise Chinese summary so the owner can understand the context before deciding whether to send the suggested reply.",
+    "",
+    "Requirements:",
+    "- Focus on what the other person wants, what has already been discussed, and any pending decision or deadline.",
+    "- Keep it to 1-2 short sentences.",
+    "- Do not suggest a reply.",
+    "- Output only the summary.",
+    "",
+    `Chat: ${conversation.chatId ?? "unknown"}`,
+    `Current message ID: ${conversation.messageId ?? "unknown"}`,
+    `Request ID: ${metadata.eventId ?? "unknown"}`,
+    "",
+    "Conversation context:",
+    context || "(no previous context)",
+    "",
+    "Current message:",
+    request.input ?? ""
+  ].join("\n");
 }
 
 function renderTemplate(template, request) {
