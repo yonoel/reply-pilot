@@ -256,6 +256,66 @@ test("PersonalWatchService coalesces continuous chat messages and drafts once wi
   assert.match(notifications[0].text, /我主要想问明天能不能定/);
 });
 
+test("PersonalWatchService does not refresh quiet window for already seen Feishu formatted timestamps", async () => {
+  const handled = [];
+  const store = new MemoryApprovalStore();
+  let now = new Date("2026-05-27T10:00:00+08:00");
+  const messages = [
+    {
+      messageId: "om-1",
+      messagePosition: "10",
+      createdAt: "2026-05-27 09:59",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "第一条"
+    },
+    {
+      messageId: "om-2",
+      messagePosition: "11",
+      createdAt: "2026-05-27 09:59",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "第二条"
+    }
+  ];
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return messages;
+      },
+      async sendText() {
+        return { message_id: "om-notify" };
+      }
+    },
+    bridge: {
+      async handleLarkMessage(message) {
+        handled.push(message);
+        return { text: `建议：${message.text}`, channel: "hermes" };
+      }
+    },
+    config: {
+      targetUserIds: ["ou-target"],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 10
+    },
+    now: () => now
+  });
+
+  const first = await service.pollOnce();
+
+  assert.equal(first.processed, 2);
+  assert.equal(handled.length, 0);
+
+  now = new Date("2026-05-27T10:00:16+08:00");
+  const second = await service.pollOnce();
+
+  assert.equal(second.processed, 0);
+  assert.equal(handled.length, 1);
+  assert.equal(handled[0].messageId, "om-2");
+});
+
 
 test("PersonalWatchService skips messages already at or before contact watermark", async () => {
   const store = new MemoryApprovalStore();
