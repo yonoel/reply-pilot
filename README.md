@@ -127,6 +127,8 @@ Before drafting, ReplyPilot loads context before the latest message with three l
 
 If the context exceeds the character limit, ReplyPilot keeps the newest messages first and trims older content.
 
+ReplyPilot asks the configured local agent channel to summarize that context before notifying the owner. The summary is separate from the suggested reply so the owner can quickly understand what the other person is asking about before choosing an action.
+
 If a new message arrives while a draft is being generated for the same conversation, ReplyPilot does not generate multiple drafts concurrently. The old draft is marked stale and a new draft is generated from the latest message.
 
 ## Notification Format
@@ -139,6 +141,11 @@ Notification format:
 ## New message from Alice
 
 ### Original message
+```text
+...
+```
+
+### Context summary
 ```text
 ...
 ```
@@ -220,6 +227,7 @@ Before using ReplyPilot for real messages, you still need to verify user OAuth, 
 poll configured listeners
   -> coalesce by chat_id quiet window
   -> load recent context
+  -> summarize context with the selected channel
   -> render prompt.md
   -> selected channel drafts a reply
   -> bot notifies owner

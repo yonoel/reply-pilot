@@ -192,6 +192,12 @@ export class PersonalWatchService {
 
     try {
       const contextMessages = await this.loadContextMessages({ listener, anchorMessage: message });
+      const contextSummary = await this.createContextSummary({
+        requestId,
+        message,
+        targetId,
+        contextMessages
+      });
       this.store.log(requestId, "hermes_draft_started", {});
       const draft = await this.bridge.handleLarkMessage({
         eventId: requestId,
@@ -223,12 +229,19 @@ export class PersonalWatchService {
       this.store.update(requestId, {
         status: STATUS.PENDING_APPROVAL,
         draftText: draft.text,
+        contextSummary,
         channel: draft.channel
       });
       this.pendingRequestByChat.set(chatKey, requestId);
       this.store.log(requestId, "hermes_draft_finished", { channel: draft.channel });
 
-      const notification = await this.notifySelf({ requestId, targetUserId: message.senderId, sourceText: message.text, draftText: draft.text });
+      const notification = await this.notifySelf({
+        requestId,
+        targetUserId: message.senderId,
+        sourceText: message.text,
+        contextSummary,
+        draftText: draft.text
+      });
       this.store.update(requestId, {
         approvalMessageId: notification.message_id
       });
@@ -341,6 +354,7 @@ export class PersonalWatchService {
         requestId: command.requestId,
         targetUserId: record.senderId,
         sourceText: record.text,
+        contextSummary: record.contextSummary,
         draftText: draft.text,
         title: `Rewritten as requested: ${command.instruction}`,
         idempotencyKey: createRewriteNotificationIdempotencyKey(command.requestId)
@@ -371,9 +385,49 @@ export class PersonalWatchService {
     throw new Error(`unsupported confirmation action: ${command.action}`);
   }
 
-  async notifySelf({ requestId, targetUserId, sourceText, draftText, title = undefined, idempotencyKey = undefined }) {
+  async createContextSummary({ requestId, message, targetId, contextMessages }) {
+    if (typeof this.bridge.handleLarkContextSummary !== "function") {
+      return "";
+    }
+    this.store.log(requestId, "context_summary_started", {});
+    try {
+      const summary = await this.bridge.handleLarkContextSummary({
+        eventId: requestId,
+        senderId: message.senderId,
+        selfUserId: this.config.selfUserId,
+        chatId: targetId,
+        messageId: message.messageId,
+        text: message.text,
+        contextMessages,
+        contextMaxChars: this.config.contextMaxChars
+      });
+      this.store.log(requestId, "context_summary_finished", { channel: summary.channel });
+      return summary.text;
+    } catch (error) {
+      this.store.log(requestId, "context_summary_failed", { message: error.message });
+      return "";
+    }
+  }
+
+  async notifySelf({
+    requestId,
+    targetUserId,
+    sourceText,
+    contextSummary = "",
+    draftText,
+    title = undefined,
+    idempotencyKey = undefined
+  }) {
     const senderName = await this.resolveDisplayName(targetUserId);
-    const markdown = buildNotificationMarkdown({ requestId, senderName, targetUserId, sourceText, draftText, title });
+    const markdown = buildNotificationMarkdown({
+      requestId,
+      senderName,
+      targetUserId,
+      sourceText,
+      contextSummary,
+      draftText,
+      title
+    });
     if (typeof this.imClient.sendMarkdown === "function") {
       return this.imClient.sendMarkdown({
         as: this.config.notifyAs,
@@ -510,15 +564,20 @@ function createRewriteNotificationIdempotencyKey(requestId) {
   return `rn-${requestId.replace(/^req-/, "").slice(0, 24)}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-function buildNotificationMarkdown({ requestId, senderName, targetUserId, sourceText, draftText, title }) {
+function buildNotificationMarkdown({ requestId, senderName, targetUserId, sourceText, contextSummary, draftText, title }) {
   const source = senderName || targetUserId;
-  return [
+  const sections = [
     `**${title ?? `New message from ${source}`}**`,
     "",
     "**Original message**",
     "```",
     sourceText,
-    "```",
+    "```"
+  ];
+  if (contextSummary) {
+    sections.push("", "**Context summary**", "```", contextSummary, "```");
+  }
+  sections.push(
     "",
     "**Suggested reply**",
     "```",
@@ -529,7 +588,8 @@ function buildNotificationMarkdown({ requestId, senderName, targetUserId, source
     `- Send: \`send ${requestId}\``,
     `- Rewrite: \`rewrite ${requestId} <instruction>\``,
     `- Ignore: \`ignore ${requestId}\``
-  ].join("\n");
+  );
+  return sections.join("\n");
 }
 
 function formatIsoWithOffset(date) {

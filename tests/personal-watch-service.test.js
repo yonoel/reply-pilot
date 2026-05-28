@@ -8,6 +8,7 @@ import { PersonalWatchService } from "../src/personal-watch/personal-watch-servi
 test("PersonalWatchService polls configured contacts and notifies self with reply suggestion", async () => {
   const notifications = [];
   const handled = [];
+  const summaries = [];
   const store = new MemoryApprovalStore();
   const service = new PersonalWatchService({
     store,
@@ -30,6 +31,10 @@ test("PersonalWatchService polls configured contacts and notifies self with repl
       }
     },
     bridge: {
+      async handleLarkContextSummary(message) {
+        summaries.push(message);
+        return { text: "对方在问明天能不能看方案，需要确认你是否会跟进。", channel: "codex" };
+      },
       async handleLarkMessage(message) {
         return { text: `建议：${message.text}`, channel: "codex" };
       }
@@ -63,10 +68,18 @@ test("PersonalWatchService polls configured contacts and notifies self with repl
     }
   ]);
   assert.equal(notifications.length, 1);
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].text, "这个方案明天能看一下吗");
+  assert.deepEqual(
+    summaries[0].contextMessages.map((message) => [message.messageId, message.text]),
+    [["om-target-1", "这个方案明天能看一下吗"]]
+  );
   assert.equal(notifications[0].as, "bot");
   assert.equal(notifications[0].userId, "ou-me");
   assert.match(notifications[0].markdown, /New message from 张三/);
   assert.match(notifications[0].markdown, /```[\s\S]*这个方案明天能看一下吗[\s\S]*```/);
+  assert.match(notifications[0].markdown, /\*\*Context summary\*\*/);
+  assert.match(notifications[0].markdown, /对方在问明天能不能看方案，需要确认你是否会跟进。/);
   assert.match(notifications[0].markdown, /\*\*Suggested reply\*\*/);
   assert.match(notifications[0].markdown, /send req-/);
   assert.match(notifications[0].markdown, /rewrite req-/);
@@ -480,6 +493,7 @@ test("PersonalWatchService rewrites a pending draft from bot confirmation text",
     senderId: "ou-target",
     text: "帮我看一下",
     draftText: "可以",
+    contextSummary: "对方希望你帮忙看一下材料。",
     channel: "codex"
   });
   const service = new PersonalWatchService({
@@ -511,6 +525,7 @@ test("PersonalWatchService rewrites a pending draft from bot confirmation text",
   assert.equal(store.get("req-1").approvalMessageId, "om-notify-2");
   assert.match(notifications[0].markdown, /Rewritten as requested/);
   assert.match(notifications[0].markdown, /更短一点/);
+  assert.match(notifications[0].markdown, /对方希望你帮忙看一下材料。/);
   assert.match(notifications[0].markdown, /改后：更短一点/);
   assert.match(notifications[0].markdown, /send req-1/);
   assert.match(notifications[0].markdown, /rewrite req-1/);
