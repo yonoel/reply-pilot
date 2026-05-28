@@ -67,7 +67,7 @@ export class PersonalWatchService {
       const watermarkKey = listener.chatId ?? listener.openId;
       const watermark = this.store.getWatermark(watermarkKey);
       const endDate = this.now();
-      const watermarkTime = Number(watermark?.createdAt);
+      const watermarkTime = messageTimeMs(watermark?.createdAt);
       const startDate = Number.isFinite(watermarkTime)
         ? new Date(watermarkTime)
         : new Date(endDate.getTime() - this.config.lookbackMinutes * 60 * 1000);
@@ -90,7 +90,8 @@ export class PersonalWatchService {
         this.queueMessage({ listener, message });
         this.store.setWatermark(watermarkKey, {
           messageId: message.messageId,
-          createdAt: message.createdAt
+          createdAt: message.createdAt,
+          ...(message.messagePosition !== undefined ? { messagePosition: message.messagePosition } : {})
         });
         processed += 1;
       }
@@ -259,7 +260,7 @@ export class PersonalWatchService {
   }
 
   async loadContextMessages({ listener, anchorMessage }) {
-    const anchorTime = Number(anchorMessage.createdAt);
+    const anchorTime = messageTimeMs(anchorMessage.createdAt);
     const endDate = Number.isFinite(anchorTime) ? new Date(anchorTime + 1000) : this.now();
     const startDate = new Date(endDate.getTime() - this.config.contextLookbackMinutes * 60 * 1000);
     const request = {
@@ -516,12 +517,39 @@ function shouldProcess({ message, listener, watermark, selfUserId }) {
   if (!watermark) {
     return true;
   }
-  const currentTime = Number(message.createdAt);
-  const lastTime = Number(watermark.createdAt);
+  const currentTime = messageTimeMs(message.createdAt);
+  const lastTime = messageTimeMs(watermark.createdAt);
   if (Number.isFinite(currentTime) && Number.isFinite(lastTime) && currentTime < lastTime) {
     return false;
   }
+  if (Number.isFinite(currentTime) && Number.isFinite(lastTime) && currentTime === lastTime) {
+    const currentPosition = messagePositionNumber(message.messagePosition);
+    const lastPosition = messagePositionNumber(watermark.messagePosition);
+    if (Number.isFinite(currentPosition) && Number.isFinite(lastPosition) && currentPosition <= lastPosition) {
+      return false;
+    }
+  }
   return !(message.messageId === watermark.messageId && message.createdAt === watermark.createdAt);
+}
+
+function messageTimeMs(value) {
+  if (value === undefined || value === null || value === "") {
+    return Number.NaN;
+  }
+  if (typeof value === "number") {
+    return value;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+  const parsed = Date.parse(String(value).replace(" ", "T"));
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function messagePositionNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : Number.NaN;
 }
 
 function createRequestId(message) {

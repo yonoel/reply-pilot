@@ -123,9 +123,11 @@ function normalizeMessage(item) {
     return undefined;
   }
   const senderName = item.sender?.name ?? item.sender?.localized_name ?? item.sender?.display_name ?? item.sender_name ?? item.senderName ?? "";
+  const messagePosition = item.message_position ?? item.messagePosition;
   return {
     messageId,
     createdAt,
+    ...(messagePosition !== undefined ? { messagePosition } : {}),
     senderId,
     ...(senderName ? { senderName } : {}),
     messageType,
