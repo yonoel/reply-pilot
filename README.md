@@ -103,7 +103,51 @@ npm start
 1. Poll `ou_xxx` contacts or `oc_xxx` chats configured in `.reply-pilot/config.json`.
 2. Listen for confirmation commands sent by the owner to the bot through `lark-cli event consume im.message.receive_v1 --as bot`.
 
-`watch` hot-reloads listener configuration. After you run `lark listeners add/remove`, the next poll reloads `.reply-pilot/config.json`: added listeners start polling and removed listeners stop polling. Watermarks and pending approval requests are preserved.
+`watch` hot-reloads listener and channel configuration. After you run `lark listeners add/remove`, the next poll reloads `.reply-pilot/config.json`: added listeners start polling and removed listeners stop polling. Watermarks and pending approval requests are preserved. After you run `channels set ollama ...` or `channels set hermes ...`, the next draft or rewrite uses the new channel without restarting `watch`.
+
+## Docker
+
+Build the image:
+
+```bash
+docker compose build
+```
+
+Prepare the editable prompt file before starting Compose:
+
+```bash
+cp prompt.example.md prompt.md
+```
+
+Initialize and configure the project-local state inside the Docker volumes:
+
+```bash
+docker compose run --rm reply-pilot npm run cli -- config init
+docker compose run --rm reply-pilot npm run cli -- lark app set --app-id cli_xxx --app-secret xxx
+docker compose run --rm reply-pilot npm run cli -- lark user set --open-id ou_me
+docker compose run --rm reply-pilot npm run cli -- lark listeners add --open-id ou_target --alias Alice
+```
+
+Authenticate `lark-cli` inside the container if this Docker environment has not been logged in yet:
+
+```bash
+docker compose run --rm reply-pilot lark-cli install
+```
+
+The Compose file persists:
+
+- `.reply-pilot/config.json` and `.reply-pilot/state.sqlite` in the `reply-pilot-state` volume.
+- `prompt.md` as a project-root bind mount.
+- `lark-cli` login state in the `lark-cli-home` volume.
+
+Start the watcher:
+
+```bash
+docker compose up -d
+docker compose logs -f reply-pilot
+```
+
+The Docker image intentionally installs only ReplyPilot runtime dependencies and `lark-cli`. It does not install Hermes, Ollama, or any other agent channel command. If you configure a local command channel inside Docker, provide that command by extending the image or using a deployment-specific image. Cloud-style channels can be added without changing this base image.
 
 ## Message Coalescing And Context
 
@@ -233,4 +277,4 @@ poll configured listeners
 npm test
 ```
 
-The current tests cover CLI configuration, local Hermes and Ollama command invocation, polling deduplication, conversation coalescing, context construction, prompt templates, sender name resolution, Markdown notifications, confirmation commands, stale request rejection, lark-cli IM/Contact command shape, and SQLite log reads.
+The current tests cover CLI configuration, Docker deployment file shape, local Hermes and Ollama command invocation, polling deduplication, conversation coalescing, context construction, prompt templates, sender name resolution, Markdown notifications, confirmation commands, stale request rejection, lark-cli IM/Contact command shape, and SQLite log reads.

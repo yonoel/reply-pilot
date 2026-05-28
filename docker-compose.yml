@@ -1,0 +1,17 @@
+services:
+  reply-pilot:
+    build: .
+    image: reply-pilot:local
+    working_dir: /app
+    environment:
+      NODE_ENV: production
+    volumes:
+      - reply-pilot-state:/app/.reply-pilot
+      - ./prompt.md:/app/prompt.md
+      - lark-cli-home:/home/node/.lark-cli
+    command: ["npm", "start"]
+    restart: unless-stopped
+
+volumes:
+  reply-pilot-state:
+  lark-cli-home:
