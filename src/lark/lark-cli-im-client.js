@@ -118,7 +118,7 @@ function normalizeMessage(item) {
   const createdAt = item.create_time ?? item.createdAt;
   const senderId = item.sender?.id ?? item.sender_id ?? item.senderId;
   const messageType = item.msg_type ?? item.message_type ?? item.messageType;
-  const text = decodeText(item.body?.content ?? item.content);
+  const text = decodeMessageText(messageType, item.body?.content ?? item.content);
   if (!messageId || !createdAt || !senderId || !messageType) {
     return undefined;
   }
@@ -133,6 +133,18 @@ function normalizeMessage(item) {
     messageType,
     text
   };
+}
+
+function decodeMessageText(messageType, content) {
+  const text = decodeText(content);
+  if (messageType === "file") {
+    const fileName = extractXmlAttribute(text, "name");
+    return fileName ? `[文件] ${fileName}` : "[文件]";
+  }
+  if (messageType === "image") {
+    return "[图片]";
+  }
+  return text;
 }
 
 function decodeText(content) {
@@ -151,6 +163,11 @@ function decodeText(content) {
     // lark-cli may already return human-readable text for some paths.
   }
   return content;
+}
+
+function extractXmlAttribute(value, name) {
+  const match = String(value ?? "").match(new RegExp(`${name}="([^"]+)"`));
+  return match?.[1] ?? "";
 }
 
 async function runExecFile(file, args) {

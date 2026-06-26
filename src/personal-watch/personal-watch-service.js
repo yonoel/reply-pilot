@@ -10,16 +10,33 @@ export class PersonalWatchService {
  *   imClient: any,
  *   bridge: any,
  *   contactClient?: any,
+ *   approvalController?: any,
+ *   approvalSurface?: any,
+ *   fallbackApprovalSurface?: any,
  *   config?: any,
  *   configProvider?: () => any | Promise<any>,
  *   now?: () => Date
  * }} options
  */
-  constructor({ store, imClient, bridge, contactClient, config = {}, configProvider, now = () => new Date() }) {
+  constructor({
+    store,
+    imClient,
+    bridge,
+    contactClient,
+    approvalController,
+    approvalSurface,
+    fallbackApprovalSurface,
+    config = {},
+    configProvider,
+    now = () => new Date()
+  }) {
     this.store = store;
     this.imClient = imClient;
     this.contactClient = contactClient;
     this.bridge = bridge;
+    this.approvalController = approvalController;
+    this.approvalSurface = approvalSurface;
+    this.fallbackApprovalSurface = fallbackApprovalSurface;
     this.config = normalizeConfig(config);
     this.configProvider = configProvider;
     this.now = now;
@@ -28,6 +45,7 @@ export class PersonalWatchService {
     this.batches = new Map();
     this.drafting = new Set();
     this.pendingRequestByChat = new Map();
+    this.hydratePendingRequestsFromStore();
   }
 
   start() {
@@ -64,7 +82,7 @@ export class PersonalWatchService {
     });
     let processed = 0;
     for (const listener of this.config.targetListeners) {
-      const watermarkKey = listener.chatId ?? listener.openId;
+      const watermarkKey = chatKeyForListener(listener);
       const watermark = this.store.getWatermark(watermarkKey);
       const endDate = this.now();
       const watermarkTime = messageTimeMs(watermark?.createdAt);
@@ -87,7 +105,7 @@ export class PersonalWatchService {
         if (!shouldProcess({ message, listener, watermark, selfUserId: this.config.selfUserId })) {
           continue;
         }
-        this.queueMessage({ listener, message });
+        await this.queueMessage({ listener, message });
         this.store.setWatermark(watermarkKey, {
           messageId: message.messageId,
           createdAt: message.createdAt,
@@ -120,19 +138,22 @@ export class PersonalWatchService {
     }
   }
 
-  queueMessage({ listener, message }) {
-    const chatKey = listener.chatId ?? listener.openId;
-    const pendingRequestId = this.pendingRequestByChat.get(chatKey);
+  async queueMessage({ listener, message }) {
+    const chatKey = chatKeyForListener(listener);
+    const pendingRequestId = this.pendingRequestByChat.get(chatKey) ?? this.findPendingRequestIdForChat(chatKey);
     if (pendingRequestId) {
       const pending = this.store.get(pendingRequestId);
       if (pending?.status === STATUS.PENDING_APPROVAL) {
-        this.store.update(pendingRequestId, {
+        const superseded = this.store.update(pendingRequestId, {
           status: STATUS.SUPERSEDED,
           supersededByMessageId: message.messageId
         });
         this.store.log(pendingRequestId, "superseded_by_new_message", { messageId: message.messageId });
+        this.pendingRequestByChat.delete(chatKey);
+        await this.notifyExpiredRequestSafely({ requestId: pendingRequestId, request: superseded });
+      } else {
+        this.pendingRequestByChat.delete(chatKey);
       }
-      this.pendingRequestByChat.delete(chatKey);
     }
 
     const batch = this.batches.get(chatKey) ?? {
@@ -167,6 +188,11 @@ export class PersonalWatchService {
 
   async processBatch({ chatKey, batch }) {
     const message = batch.latestMessage;
+    const sourceText = sourceTextForBatch(batch);
+    const sourceMessage = {
+      ...message,
+      text: sourceText
+    };
     const listener = batch.listener;
     const requestId = createRequestId(message);
     if (this.store.get(requestId)) {
@@ -174,17 +200,21 @@ export class PersonalWatchService {
     }
     const targetId = listener.openId ?? listener.chatId;
     this.drafting.add(chatKey);
+    const senderName = message.senderName || (await this.resolveDisplayName(message.senderId));
 
     this.store.create({
       id: requestId,
       eventId: requestId,
       senderId: message.senderId,
+      senderName,
       chatId: targetId,
       messageId: message.messageId,
-      text: message.text,
+      text: sourceText,
       status: STATUS.RECEIVED,
+      uiState: "thinking",
       source: "personal-watch"
     });
+    await this.notifyDraftingRequestSafely({ requestId, request: this.store.get(requestId) });
     this.store.log(requestId, "personal_watch_message_found", {
       targetId,
       messageId: message.messageId
@@ -194,7 +224,7 @@ export class PersonalWatchService {
       const contextMessages = await this.loadContextMessages({ listener, anchorMessage: message });
       const contextSummary = await this.createContextSummary({
         requestId,
-        message,
+        message: sourceMessage,
         targetId,
         contextMessages
       });
@@ -205,19 +235,20 @@ export class PersonalWatchService {
         selfUserId: this.config.selfUserId,
         chatId: targetId,
         messageId: message.messageId,
-        text: message.text,
+        text: sourceText,
         contextMessages,
         contextMaxChars: this.config.contextMaxChars
       });
 
       const latestBatch = this.batches.get(chatKey);
       if (latestBatch?.dirty || latestBatch?.latestMessage?.messageId !== message.messageId) {
-        this.store.update(requestId, {
+        const superseded = this.store.update(requestId, {
           status: STATUS.SUPERSEDED
         });
         this.store.log(requestId, "superseded_during_draft", {
           latestMessageId: latestBatch?.latestMessage?.messageId
         });
+        await this.notifyExpiredRequestSafely({ requestId, request: superseded });
         if (latestBatch) {
           latestBatch.dirty = false;
           latestBatch.updatedAtMs = this.now().getTime();
@@ -228,24 +259,43 @@ export class PersonalWatchService {
 
       this.store.update(requestId, {
         status: STATUS.PENDING_APPROVAL,
+        uiState: "pending",
         draftText: draft.text,
         contextSummary,
+        contextMessages,
+        contextMaxChars: this.config.contextMaxChars,
+        selfUserId: this.config.selfUserId,
         channel: draft.channel
       });
-      this.pendingRequestByChat.set(chatKey, requestId);
       this.store.log(requestId, "hermes_draft_finished", { channel: draft.channel });
 
-      const notification = await this.notifySelf({
-        requestId,
-        targetUserId: message.senderId,
-        sourceText: message.text,
-        contextSummary,
-        draftText: draft.text
-      });
-      this.store.update(requestId, {
-        approvalMessageId: notification.message_id
-      });
-      this.store.log(requestId, "personal_watch_notification_sent", { messageId: notification.message_id });
+      if (this.approvalSurface || this.fallbackApprovalSurface || this.config.fallbackLarkBot) {
+        this.pendingRequestByChat.set(chatKey, requestId);
+        const notification = await this.notifyPendingRequest({
+          requestId,
+          request: this.store.get(requestId),
+          message,
+          contextSummary,
+          draftText: draft.text
+        });
+        this.store.update(requestId, {
+          approvalSurface: notification.surface ?? "lark-bot",
+          approvalMessageId: notification.messageId ?? notification.message_id
+        });
+        this.store.log(requestId, "personal_watch_notification_sent", {
+          surface: notification.surface ?? "lark-bot",
+          messageId: notification.messageId ?? notification.message_id
+        });
+      } else {
+        this.store.update(requestId, {
+          status: STATUS.IGNORED,
+          uiState: "idle",
+          ignoredBy: "system"
+        });
+        this.store.log(requestId, "personal_watch_notification_skipped", {
+          reason: "approval_surface_disabled"
+        });
+      }
       this.batches.delete(chatKey);
     } catch (error) {
       this.store.update(requestId, {
@@ -315,6 +365,25 @@ export class PersonalWatchService {
       };
     }
 
+    if (this.approvalController) {
+      if (command.action === "send") {
+        const request = await this.approvalController.send(command.requestId, "lark-bot");
+        return { requestId: command.requestId, status: request.status };
+      }
+      if (command.action === "ignore") {
+        const request = await this.approvalController.ignore(command.requestId, "lark-bot");
+        return { requestId: command.requestId, status: request.status };
+      }
+      if (command.action === "rewrite") {
+        const result = await this.approvalController.handleInstruction({
+          requestId: command.requestId,
+          instruction: command.instruction,
+          actor: "lark-bot"
+        });
+        return { requestId: command.requestId, status: result.request.status };
+      }
+    }
+
     if (command.action === "send") {
       const sent = await this.imClient.replyText({
         as: this.config.replyAs,
@@ -338,9 +407,12 @@ export class PersonalWatchService {
       const draft = await this.bridge.handleLarkMessage({
         eventId: record.eventId,
         senderId: record.senderId,
+        selfUserId: record.selfUserId,
         chatId: record.chatId,
         messageId: record.messageId,
         text: record.text,
+        contextMessages: record.contextMessages,
+        contextMaxChars: record.contextMaxChars,
         rewriteInstruction: command.instruction,
         previousDraftText: record.draftText
       });
@@ -444,6 +516,47 @@ export class PersonalWatchService {
     });
   }
 
+  async notifyPendingRequest({ requestId, request, message, contextSummary, draftText }) {
+    if (this.approvalSurface) {
+      try {
+        return await this.approvalSurface.notifyPending(request);
+      } catch (error) {
+        this.store.log(requestId, "approval_surface_failed", {
+          surface: "primary",
+          message: error.message
+        });
+        if (!this.fallbackApprovalSurface && !this.config.fallbackLarkBot) {
+          throw error;
+        }
+      }
+    }
+    if (this.fallbackApprovalSurface) {
+      return this.fallbackApprovalSurface.notifyPending(request);
+    }
+    return this.notifySelf({
+      requestId,
+      targetUserId: message.senderId,
+      sourceText: message.text,
+      contextSummary,
+      draftText
+    });
+  }
+
+  async notifyDraftingRequestSafely({ requestId, request }) {
+    if (typeof this.approvalSurface?.notifyDrafting !== "function") {
+      return undefined;
+    }
+    try {
+      return await this.approvalSurface.notifyDrafting(request);
+    } catch (error) {
+      this.store.log(requestId, "drafting_approval_surface_failed", {
+        surface: "primary",
+        message: error.message
+      });
+      return undefined;
+    }
+  }
+
   async resolveDisplayName(openId) {
     if (!this.contactClient || !openId || openId.startsWith("oc_")) {
       return openId;
@@ -451,7 +564,29 @@ export class PersonalWatchService {
     return this.contactClient.getDisplayName(openId);
   }
 
-  async notifyExpiredRequest({ requestId }) {
+  async notifyExpiredRequest({ requestId, request = undefined }) {
+    if (this.approvalSurface) {
+      try {
+        return await this.approvalSurface.notifyExpired(requestId, request);
+      } catch (error) {
+        this.store.log(requestId, "expired_approval_surface_failed", {
+          surface: "primary",
+          message: error.message
+        });
+        if (!this.fallbackApprovalSurface && !this.config.fallbackLarkBot) {
+          throw error;
+        }
+      }
+    }
+    if (this.fallbackApprovalSurface) {
+      return this.fallbackApprovalSurface.notifyExpired(requestId, request);
+    }
+    if (!this.config.fallbackLarkBot) {
+      this.store.log(requestId, "expired_notification_skipped", {
+        reason: "approval_surface_disabled"
+      });
+      return undefined;
+    }
     const markdown = [
       "**Suggestion expired**",
       "",
@@ -474,6 +609,42 @@ export class PersonalWatchService {
       idempotencyKey: `expired-${requestId}`
     });
   }
+
+  async notifyExpiredRequestSafely({ requestId, request }) {
+    try {
+      return await this.notifyExpiredRequest({ requestId, request });
+    } catch (error) {
+      this.store.log(requestId, "superseded_notification_failed", { message: error.message });
+      return undefined;
+    }
+  }
+
+  hydratePendingRequestsFromStore() {
+    if (typeof this.store.pendingRequests !== "function") {
+      return;
+    }
+    for (const request of this.store.pendingRequests()) {
+      const chatKey = request.chatId ?? request.senderId;
+      if (chatKey && !this.pendingRequestByChat.has(chatKey)) {
+        this.pendingRequestByChat.set(chatKey, request.id);
+      }
+    }
+  }
+
+  findPendingRequestIdForChat(chatKey) {
+    if (typeof this.store.pendingRequests !== "function") {
+      return undefined;
+    }
+    const request = this.store.pendingRequests().find((candidate) => (candidate.chatId ?? candidate.senderId) === chatKey);
+    if (request) {
+      this.pendingRequestByChat.set(chatKey, request.id);
+    }
+    return request?.id;
+  }
+}
+
+function chatKeyForListener(listener) {
+  return listener.openId ?? listener.chatId;
 }
 
 function normalizeTargetListeners(config) {
@@ -496,7 +667,8 @@ function normalizeConfig(config = {}) {
     contextLookbackMinutes: config.contextLookbackMinutes ?? 120,
     contextMaxChars: config.contextMaxChars ?? 6000,
     notifyAs: config.notifyAs ?? "bot",
-    replyAs: config.replyAs ?? "user"
+    replyAs: config.replyAs ?? "user",
+    fallbackLarkBot: config.fallbackLarkBot !== false
   };
 }
 
@@ -505,7 +677,7 @@ function listenerKey(listener) {
 }
 
 function shouldProcess({ message, listener, watermark, selfUserId }) {
-  if (message.messageType !== "text" || !message.text.trim()) {
+  if (!shouldDraftMessageType(message.messageType) || !message.text.trim()) {
     return false;
   }
   if (listener.openId && message.senderId !== listener.openId) {
@@ -530,6 +702,23 @@ function shouldProcess({ message, listener, watermark, selfUserId }) {
     }
   }
   return !(message.messageId === watermark.messageId && message.createdAt === watermark.createdAt);
+}
+
+function shouldDraftMessageType(messageType) {
+  return messageType === "text" || messageType === "file" || messageType === "image";
+}
+
+function sourceTextForBatch(batch) {
+  const latest = batch.latestMessage;
+  if (latest?.messageType === "text") {
+    return latest.text;
+  }
+  const messages = batch.messages ?? [];
+  const hasPriorText = messages.some((message) => message.messageId !== latest?.messageId && message.messageType === "text");
+  if (!hasPriorText) {
+    return latest?.text ?? "";
+  }
+  return messages.map((message) => message.text).filter((text) => text?.trim()).join("\n");
 }
 
 function messageTimeMs(value) {
@@ -571,17 +760,17 @@ function buildNotificationMarkdown({ requestId, senderName, targetUserId, source
     "",
     "**Original message**",
     "```",
-    sourceText,
+    fencedMarkdownValue(sourceText),
     "```"
   ];
   if (contextSummary) {
-    sections.push("", "**Context summary**", "```", contextSummary, "```");
+    sections.push("", "**Context summary**", "```", fencedMarkdownValue(contextSummary), "```");
   }
   sections.push(
     "",
     "**Suggested reply**",
     "```",
-    draftText,
+    fencedMarkdownValue(draftText),
     "```",
     "",
     "**Actions**",
@@ -590,6 +779,10 @@ function buildNotificationMarkdown({ requestId, senderName, targetUserId, source
     `- Ignore: \`ignore ${requestId}\``
   );
   return sections.join("\n");
+}
+
+function fencedMarkdownValue(value) {
+  return String(value ?? "").replaceAll("```", "``\\`");
 }
 
 function formatIsoWithOffset(date) {

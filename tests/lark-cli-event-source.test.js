@@ -84,6 +84,48 @@ test("LarkCliEventSource consumes NDJSON events after ready marker", async () =>
   assert.equal(messages[0].text, "@Hermes hello");
 });
 
+test("LarkCliEventSource skips unsupported message events and continues consuming", async () => {
+  const child = fakeChildProcess();
+  const messages = [];
+  const source = new LarkCliEventSource({
+    spawnCommand() {
+      return child;
+    },
+    async onMessage(message) {
+      messages.push(message);
+    }
+  });
+
+  const ready = source.start();
+  child.stderr.write("[event] ready event_key=im.message.receive_v1\n");
+  await ready;
+  child.stdout.write(
+    `${JSON.stringify({
+      event_id: "evt-sticker",
+      sender_id: "ou-user",
+      chat_id: "oc-chat",
+      message_id: "om-sticker",
+      message_type: "sticker",
+      content: "[sticker]"
+    })}\n`
+  );
+  child.stdout.write(
+    `${JSON.stringify({
+      event_id: "evt-text",
+      sender_id: "ou-user",
+      chat_id: "oc-chat",
+      message_id: "om-text",
+      message_type: "text",
+      content: "继续处理这条"
+    })}\n`
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].messageId, "om-text");
+  assert.equal(messages[0].text, "继续处理这条");
+});
+
 function fakeChildProcess() {
   const child = new EventEmitter();
   child.stdout = new PassThrough();

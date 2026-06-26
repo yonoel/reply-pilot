@@ -39,6 +39,13 @@ export class MemoryApprovalStore {
     return this.entries.filter((entry) => entry.requestId === requestId).map((entry) => ({ ...entry }));
   }
 
+  pendingRequests() {
+    return [...this.records.values()]
+      .map((record) => ({ ...record }))
+      .reverse()
+      .filter(isVisibleDesktopRequest);
+  }
+
   getWatermark(targetUserId) {
     const watermark = this.watermarks.get(targetUserId);
     return watermark ? { ...watermark } : undefined;
@@ -48,4 +55,8 @@ export class MemoryApprovalStore {
     this.watermarks.set(targetUserId, { ...watermark });
     return this.getWatermark(targetUserId);
   }
+}
+
+function isVisibleDesktopRequest(record) {
+  return record.status === "PENDING_APPROVAL" || (record.status === "RECEIVED" && record.uiState === "thinking");
 }

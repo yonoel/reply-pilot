@@ -105,6 +105,37 @@ npm start
 
 `watch` hot-reloads listener configuration. After you run `lark listeners add/remove`, the next poll reloads `.reply-pilot/config.json`: added listeners start polling and removed listeners stop polling. Watermarks and pending approval requests are preserved.
 
+## Desktop Pet
+
+ReplyPilot V1 can run with a desktop approval surface:
+
+```bash
+export REPLY_PILOT_DESKTOP_BOOTSTRAP_TOKEN="rpb_$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
+launchctl setenv REPLY_PILOT_DESKTOP_BOOTSTRAP_TOKEN "$REPLY_PILOT_DESKTOP_BOOTSTRAP_TOKEN"
+npm run cli -- watch --desktop
+npm run desktop:build
+open ./src-tauri/target/release/bundle/macos/ReplyPilot.app
+```
+
+Run the watcher and the macOS app with the same `REPLY_PILOT_DESKTOP_BOOTSTRAP_TOKEN` value. `watch --desktop` keeps the Lark watcher, approval controller, desktop event bus, and local desktop API running. `ReplyPilot.app` reads the bootstrap token from the user `launchd` environment and exchanges it once for the desktop API token. The old Lark bot confirmation command path remains available as fallback when configured.
+
+The bootstrap token is one-use. If you quit and reopen `ReplyPilot.app`, restart `watch --desktop` with a fresh bootstrap token and update `launchctl setenv` before opening the app again.
+
+Use the built app bundle for local desktop validation on macOS. `npm run desktop:dev` is useful while iterating on code, but the app bundle path above is the expected manual verification path for the desktop pet window.
+
+When the desktop API starts, ReplyPilot creates `.reply-pilot/desktop.json` with a local `apiToken` and owner-only file permissions. The token is used by the Tauri UI when it calls `127.0.0.1:3017`; do not paste this file into chats or docs. `.reply-pilot/` is ignored by git.
+
+The desktop pet starts as a small transparent pixel robot window. It does not show a thinking state for the first incoming message. It waits until the suggested reply is ready, then expands into an approval bubble with the original message and suggested reply. It only shows `思考中` after the user asks for a rewrite.
+
+The local desktop API can also be started by itself for UI development:
+
+```bash
+npm run cli -- desktop-api
+curl -s http://127.0.0.1:3017/api/health
+```
+
+`desktop-api` performs the same runtime config validation as `watch`. A health response only proves the local API is reachable; it is not a real Lark E2E check.
+
 ## Message Coalescing And Context
 
 A new message is only a trigger. ReplyPilot does not send a single raw message directly to Hermes.
@@ -220,6 +251,18 @@ This runs:
 This only verifies dry-run command shape and local command availability. It does not mean the real integration is complete.
 
 Before using ReplyPilot for real messages, you still need to verify user OAuth, bot event subscription, real contact polling, local channel generation, bot notification, and one confirmed reply end to end.
+
+### Desktop Pet E2E Evidence
+
+The desktop pet path is considered verified only when all of these are true:
+
+- A real configured Lark message creates a pending request.
+- The desktop pet shows the message and suggested reply after drafting finishes.
+- A rewrite instruction shows the pet's thinking state and produces a new draft.
+- Sending from the desktop pet creates a real user reply in Lark.
+- `logs show` confirms `SENT` and `sentMessageId`.
+
+Dry-run auth checks, local API health, mock tests, and Tauri window launch are separate checks and do not count as real Lark E2E completion.
 
 ## Flow
 

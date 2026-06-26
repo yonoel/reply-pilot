@@ -90,6 +90,17 @@ export class SqliteApprovalStore {
       }));
   }
 
+  pendingRequests() {
+    return this.db
+      .prepare("SELECT id, data FROM approval_requests ORDER BY rowid DESC")
+      .all()
+      .map((row) => ({
+        id: row.id,
+        ...JSON.parse(String(row.data))
+      }))
+      .filter(isVisibleDesktopRequest);
+  }
+
   getWatermark(targetUserId) {
     const row = this.db.prepare("SELECT data FROM watch_watermarks WHERE target_user_id = ?").get(targetUserId);
     return row ? JSON.parse(String(row.data)) : undefined;
@@ -107,4 +118,8 @@ export class SqliteApprovalStore {
   close() {
     this.db.close();
   }
+}
+
+function isVisibleDesktopRequest(record) {
+  return record.status === "PENDING_APPROVAL" || (record.status === "RECEIVED" && record.uiState === "thinking");
 }

@@ -42,6 +42,27 @@ export function createDefaultProjectConfig() {
     storage: {
       sqlitePath: join(CONFIG_DIR, STATE_FILE)
     },
+    desktop: {
+      enabled: true,
+      theme: "pixel",
+      position: {
+        mode: "free",
+        x: 1320,
+        y: 820,
+        corner: "bottom-right"
+      },
+      alwaysOnTop: true,
+      scale: 1,
+      doNotDisturb: false,
+      showSystemNotification: true,
+      apiPort: 3017
+    },
+    approval: {
+      primarySurface: "desktop-pet",
+      fallbackLarkBot: true,
+      instructionMode: "rules",
+      allowDirectSendByInstruction: true
+    },
     watch: {
       pollIntervalSeconds: 30,
       lookbackMinutes: 10,

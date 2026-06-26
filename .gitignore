@@ -6,3 +6,5 @@ prompt.md
 .DS_Store
 coverage/
 data/
+src-tauri/target/
+src-tauri/gen/

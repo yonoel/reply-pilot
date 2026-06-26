@@ -93,6 +93,72 @@ test("LarkCliImClient lists messages by chat id as user", async () => {
   ]);
 });
 
+test("LarkCliImClient normalizes file messages into readable text", async () => {
+  const client = new LarkCliImClient({
+    async runCommand() {
+      return {
+        stdout: JSON.stringify({
+          items: [
+            {
+              message_id: "om-file",
+              create_time: "2026-06-25 16:25",
+              msg_type: "file",
+              content: '<file key="file-key" name="demo.zip"/>',
+              sender: {
+                id: "ou-target",
+                sender_type: "user",
+                name: "温浩"
+              }
+            }
+          ]
+        })
+      };
+    }
+  });
+
+  const messages = await client.listP2pMessages({
+    chatId: "oc-chat",
+    start: "2026-06-25T16:00:00+08:00",
+    end: "2026-06-25T16:30:00+08:00"
+  });
+
+  assert.equal(messages[0].messageType, "file");
+  assert.equal(messages[0].text, "[文件] demo.zip");
+});
+
+test("LarkCliImClient normalizes image messages into readable text", async () => {
+  const client = new LarkCliImClient({
+    async runCommand() {
+      return {
+        stdout: JSON.stringify({
+          items: [
+            {
+              message_id: "om-image",
+              create_time: "2026-06-26 11:10",
+              msg_type: "image",
+              content: "[Image: img_v3_02131_59ffeb0d-9e29-49a1-b2ab-797b58fabd2g]",
+              sender: {
+                id: "ou-target",
+                sender_type: "user",
+                name: "陈钢"
+              }
+            }
+          ]
+        })
+      };
+    }
+  });
+
+  const messages = await client.listP2pMessages({
+    chatId: "oc-chat",
+    start: "2026-06-26T11:00:00+08:00",
+    end: "2026-06-26T11:30:00+08:00"
+  });
+
+  assert.equal(messages[0].messageType, "image");
+  assert.equal(messages[0].text, "[图片]");
+});
+
 test("LarkCliImClient sends bot notification to self", async () => {
   const calls = [];
   const client = new LarkCliImClient({

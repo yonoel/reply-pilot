@@ -230,6 +230,159 @@ test("CLI watch reports missing runtime config before starting", async () => {
   }
 });
 
+test("CLI desktop-api validates runtime config before starting", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-cli-"));
+  const errors = [];
+  try {
+    const deps = { cwd, stderr: (line) => errors.push(line) };
+    await runCli(["config", "init"], deps);
+
+    const result = await runCli(["desktop-api"], deps);
+
+    assert.equal(result.exitCode, 1);
+    assert.match(errors.at(-1), /missing config: lark.app.appId/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("CLI watch can start with desktop approval surface", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-cli-"));
+  const output = [];
+  const created = [];
+  try {
+    const deps = {
+      cwd,
+      stdout: (line) => output.push(line),
+      createPersonalWatchService({ config, approvalSurface, approvalController }) {
+        created.push({ config, approvalSurface, approvalController });
+        return {
+          start() {}
+        };
+      },
+      createEventSource() {
+        return {
+          async start() {}
+        };
+      }
+    };
+
+    await runCli(["config", "init"], deps);
+    await runCli(["lark", "app", "set", "--app-id", "cli_app", "--app-secret", "secret_1"], deps);
+    await runCli(["lark", "user", "set", "--open-id", "ou-me"], deps);
+    await runCli(["lark", "listeners", "add", "--open-id", "ou-target"], deps);
+
+    const result = await runCli(["watch", "--desktop"], deps);
+
+    assert.equal(result.exitCode, 0);
+    assert.ok(created[0].approvalSurface);
+    assert.equal(created[0].approvalController, undefined);
+    assert.match(output.at(-1), /watch started/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("CLI watch stops service when confirmation event source fails to start", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-cli-"));
+  const stopped = [];
+  try {
+    const deps = {
+      cwd,
+      stderr() {},
+      createPersonalWatchService() {
+        return {
+          start() {},
+          stop() {
+            stopped.push(true);
+          }
+        };
+      },
+      createEventSource() {
+        return {
+          async start() {
+            throw new Error("event source failed");
+          }
+        };
+      }
+    };
+
+    await runCli(["config", "init"], deps);
+    await runCli(["lark", "app", "set", "--app-id", "cli_app", "--app-secret", "secret_1"], deps);
+    await runCli(["lark", "user", "set", "--open-id", "ou-me"], deps);
+    await runCli(["lark", "listeners", "add", "--open-id", "ou-target"], deps);
+
+    const result = await runCli(["watch"], deps);
+
+    assert.equal(result.exitCode, 1);
+    assert.deepEqual(stopped, [true]);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("CLI watch does not inject bogus lark bot surface into mocked service", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-cli-"));
+  const created = [];
+  try {
+    const deps = {
+      cwd,
+      createPersonalWatchService({ approvalSurface, approvalController }) {
+        created.push({ approvalSurface, approvalController });
+        return {
+          start() {}
+        };
+      },
+      createEventSource() {
+        return {
+          async start() {}
+        };
+      }
+    };
+
+    await runCli(["config", "init"], deps);
+    await runCli(["lark", "app", "set", "--app-id", "cli_app", "--app-secret", "secret_1"], deps);
+    await runCli(["lark", "user", "set", "--open-id", "ou-me"], deps);
+    await runCli(["lark", "listeners", "add", "--open-id", "ou-target"], deps);
+
+    const result = await runCli(["watch"], deps);
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(created[0].approvalSurface, undefined);
+    assert.equal(created[0].approvalController, undefined);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("CLI desktop-api reports unavailable when watch service is injected", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-cli-"));
+  const errors = [];
+  try {
+    const deps = {
+      cwd,
+      stderr: (line) => errors.push(line),
+      createPersonalWatchService() {
+        return {
+          start() {}
+        };
+      }
+    };
+
+    await runCli(["config", "init"], deps);
+    await runCli(["lark", "app", "set", "--app-id", "cli_app", "--app-secret", "secret_1"], deps);
+    await runCli(["lark", "user", "set", "--open-id", "ou-me"], deps);
+    await runCli(["lark", "listeners", "add", "--open-id", "ou-target"], deps);
+
+    const result = await runCli(["desktop-api"], deps);
+
+    assert.equal(result.exitCode, 1);
+    assert.match(errors.at(-1), /desktop api server unavailable/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("CLI auth-check runs lark dry-run commands and hermes help check", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-cli-"));
   const calls = [];

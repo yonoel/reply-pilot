@@ -87,6 +87,550 @@ test("PersonalWatchService polls configured contacts and notifies self with repl
   assert.equal(store.getWatermark("ou-target").messageId, "om-target-1");
 });
 
+test("PersonalWatchService notifies desktop approval surface without sending bot markdown", async () => {
+  const surfaceEvents = [];
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [
+          {
+            messageId: "om-1",
+            createdAt: "1779811200000",
+            senderId: "ou-target",
+            messageType: "text",
+            text: "这个方案我下午能看一下吗？"
+          }
+        ];
+      },
+      async sendMarkdown() {
+        throw new Error("desktop surface should not send bot markdown");
+      }
+    },
+    bridge: {
+      async handleLarkMessage() {
+        return { text: "可以，我下午先看一版。", channel: "codex" };
+      }
+    },
+    approvalSurface: {
+      async notifyPending(request) {
+        surfaceEvents.push(request);
+        return { surface: "desktop-pet" };
+      }
+    },
+    config: {
+      targetUserIds: ["ou-target"],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 0
+    },
+    now: () => new Date("2026-05-27T10:10:00+08:00")
+  });
+
+  await service.pollOnce();
+
+  assert.equal(surfaceEvents.length, 1);
+  assert.equal(surfaceEvents[0].draftText, "可以，我下午先看一版。");
+  assert.equal(surfaceEvents[0].senderName, "ou-target");
+  assert.equal(store.get(surfaceEvents[0].id).uiState, "pending");
+  assert.equal(store.get(surfaceEvents[0].id).approvalSurface, "desktop-pet");
+});
+
+test("PersonalWatchService processes file messages with readable text", async () => {
+  const surfaceEvents = [];
+  const handled = [];
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [
+          {
+            messageId: "om-file",
+            createdAt: "2026-06-25 16:25",
+            messagePosition: "4198",
+            senderId: "ou-target",
+            senderName: "温浩",
+            messageType: "file",
+            text: "[文件] demo.zip"
+          }
+        ];
+      }
+    },
+    bridge: {
+      async handleLarkMessage(message) {
+        handled.push(message);
+        return { text: "收到，我看下。", channel: "codex" };
+      }
+    },
+    approvalSurface: {
+      async notifyPending(request) {
+        surfaceEvents.push(request);
+        return { surface: "desktop-pet" };
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 0
+    },
+    now: () => new Date("2026-06-25T16:30:00+08:00")
+  });
+
+  const result = await service.pollOnce();
+
+  assert.equal(result.processed, 1);
+  assert.equal(handled[0].text, "[文件] demo.zip");
+  assert.equal(surfaceEvents[0].senderName, "温浩");
+  assert.equal(surfaceEvents[0].text, "[文件] demo.zip");
+  assert.equal(surfaceEvents[0].draftText, "收到，我看下。");
+});
+
+test("PersonalWatchService processes image messages with readable text", async () => {
+  const surfaceEvents = [];
+  const handled = [];
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [
+          {
+            messageId: "om-image",
+            createdAt: "2026-06-26 11:10",
+            messagePosition: "7271",
+            senderId: "ou-target",
+            senderName: "陈钢",
+            messageType: "image",
+            text: "[图片]"
+          }
+        ];
+      }
+    },
+    bridge: {
+      async handleLarkMessage(message) {
+        handled.push(message);
+        return { text: "收到，我看下。", channel: "codex" };
+      }
+    },
+    approvalSurface: {
+      async notifyPending(request) {
+        surfaceEvents.push(request);
+        return { surface: "desktop-pet" };
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 0
+    },
+    now: () => new Date("2026-06-26T11:15:00+08:00")
+  });
+
+  const result = await service.pollOnce();
+
+  assert.equal(result.processed, 1);
+  assert.equal(handled[0].text, "[图片]");
+  assert.equal(surfaceEvents[0].senderName, "陈钢");
+  assert.equal(surfaceEvents[0].text, "[图片]");
+  assert.equal(surfaceEvents[0].draftText, "收到，我看下。");
+});
+
+test("PersonalWatchService keeps prior text when a batch ends with an image", async () => {
+  const surfaceEvents = [];
+  const handled = [];
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [];
+      }
+    },
+    bridge: {
+      async handleLarkMessage(message) {
+        handled.push(message);
+        return { text: `建议：${message.text}`, channel: "codex" };
+      }
+    },
+    approvalSurface: {
+      async notifyPending(request) {
+        surfaceEvents.push(request);
+        return { surface: "desktop-pet" };
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }],
+      selfUserId: "ou-me",
+      quietWindowSeconds: 0
+    }
+  });
+
+  await service.queueMessage({
+    listener: { chatId: "oc-chat" },
+    message: {
+      messageId: "om-text",
+      createdAt: "2026-06-26 11:10",
+      messagePosition: "7269",
+      senderId: "ou-target",
+      senderName: "陈钢",
+      messageType: "text",
+      text: "没"
+    }
+  });
+  await service.queueMessage({
+    listener: { chatId: "oc-chat" },
+    message: {
+      messageId: "om-image",
+      createdAt: "2026-06-26 11:10",
+      messagePosition: "7271",
+      senderId: "ou-target",
+      senderName: "陈钢",
+      messageType: "image",
+      text: "[图片]"
+    }
+  });
+  await service.flushDueBatches();
+
+  assert.equal(handled[0].text, "没\n[图片]");
+  assert.equal(surfaceEvents[0].text, "没\n[图片]");
+  assert.equal(surfaceEvents[0].messageId, "om-image");
+  assert.equal(surfaceEvents[0].draftText, "建议：没\n[图片]");
+});
+
+test("PersonalWatchService falls back to lark bot surface when desktop surface fails", async () => {
+  const fallbackEvents = [];
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [
+          {
+            messageId: "om-1",
+            createdAt: "1779811200000",
+            senderId: "ou-target",
+            messageType: "text",
+            text: "这个方案我下午能看一下吗？"
+          }
+        ];
+      }
+    },
+    bridge: {
+      async handleLarkMessage() {
+        return { text: "可以，我下午先看一版。", channel: "codex" };
+      }
+    },
+    approvalSurface: {
+      async notifyPending() {
+        throw new Error("desktop unavailable");
+      }
+    },
+    fallbackApprovalSurface: {
+      async notifyPending(request) {
+        fallbackEvents.push(request);
+        return { surface: "lark-bot", messageId: "om-notify" };
+      }
+    },
+    config: {
+      targetUserIds: ["ou-target"],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 0
+    },
+    now: () => new Date("2026-05-27T10:10:00+08:00")
+  });
+
+  await service.pollOnce();
+
+  assert.equal(fallbackEvents.length, 1);
+  assert.equal(store.get(fallbackEvents[0].id).approvalSurface, "lark-bot");
+  assert.equal(store.get(fallbackEvents[0].id).approvalMessageId, "om-notify");
+  const failure = store.entries.find((log) => log.event === "approval_surface_failed");
+  assert.equal(failure.data.message, "desktop unavailable");
+});
+
+test("PersonalWatchService skips bot notification when fallback lark bot is disabled", async () => {
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [
+          {
+            messageId: "om-1",
+            createdAt: "1779811200000",
+            senderId: "ou-target",
+            messageType: "text",
+            text: "这个方案我下午能看一下吗？"
+          }
+        ];
+      },
+      async sendMarkdown() {
+        throw new Error("fallback lark bot is disabled");
+      },
+      async sendText() {
+        throw new Error("fallback lark bot is disabled");
+      }
+    },
+    bridge: {
+      async handleLarkMessage() {
+        return { text: "可以，我下午先看一版。", channel: "codex" };
+      }
+    },
+    config: {
+      targetUserIds: ["ou-target"],
+      selfUserId: "ou-me",
+      lookbackMinutes: 10,
+      quietWindowSeconds: 0,
+      fallbackLarkBot: false
+    },
+    now: () => new Date("2026-05-27T10:10:00+08:00")
+  });
+
+  await service.pollOnce();
+
+  assert.equal(store.pendingRequests().length, 0);
+  const [request] = [...store.records.values()];
+  assert.equal(request.status, STATUS.IGNORED);
+  assert.equal(request.approvalMessageId, undefined);
+  const ignored = store.entries.find((log) => log.event === "personal_watch_notification_skipped");
+  assert.equal(ignored.data.reason, "approval_surface_disabled");
+});
+
+test("PersonalWatchService supersedes pending requests restored from store after restart", async () => {
+  const expired = [];
+  const store = new MemoryApprovalStore();
+  store.create({
+    id: "req-old",
+    status: STATUS.PENDING_APPROVAL,
+    chatId: "ou-target",
+    messageId: "om-old",
+    draftText: "旧建议"
+  });
+  const service = new PersonalWatchService({
+    store,
+    imClient: {},
+    bridge: {},
+    approvalSurface: {
+      async notifyExpired(requestId, request) {
+        expired.push({ requestId, request });
+      }
+    },
+    config: {
+      targetUserIds: ["ou-target"]
+    }
+  });
+
+  await service.queueMessage({
+    listener: { openId: "ou-target" },
+    message: {
+      messageId: "om-new",
+      createdAt: "1779811200000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "新消息"
+    }
+  });
+
+  assert.equal(store.get("req-old").status, STATUS.SUPERSEDED);
+  assert.equal(expired[0].requestId, "req-old");
+});
+
+test("PersonalWatchService uses the same chat key when listener has chatId and openId", async () => {
+  const expired = [];
+  const store = new MemoryApprovalStore();
+  store.create({
+    id: "req-old",
+    status: STATUS.PENDING_APPROVAL,
+    chatId: "ou-target",
+    messageId: "om-old",
+    draftText: "旧建议"
+  });
+  const service = new PersonalWatchService({
+    store,
+    imClient: {},
+    bridge: {},
+    approvalSurface: {
+      async notifyExpired(requestId, request) {
+        expired.push({ requestId, request });
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat", openId: "ou-target" }]
+    }
+  });
+
+  await service.queueMessage({
+    listener: { chatId: "oc-chat", openId: "ou-target" },
+    message: {
+      messageId: "om-new",
+      createdAt: "1779811200000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "新消息"
+    }
+  });
+
+  assert.equal(store.get("req-old").status, STATUS.SUPERSEDED);
+  assert.equal(expired[0].requestId, "req-old");
+});
+
+test("PersonalWatchService keeps processing when superseded notification fails", async () => {
+  const store = new MemoryApprovalStore();
+  store.create({
+    id: "req-old",
+    status: STATUS.PENDING_APPROVAL,
+    chatId: "oc-chat",
+    messageId: "om-old",
+    draftText: "旧建议"
+  });
+  const service = new PersonalWatchService({
+    store,
+    imClient: {},
+    bridge: {},
+    approvalSurface: {
+      async notifyExpired() {
+        throw new Error("desktop unavailable");
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }],
+      fallbackLarkBot: false
+    }
+  });
+  service.pendingRequestByChat.set("oc-chat", "req-old");
+
+  await service.queueMessage({
+    listener: { chatId: "oc-chat" },
+    message: {
+      messageId: "om-new",
+      createdAt: "1779811200000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "新消息"
+    }
+  });
+
+  assert.equal(store.get("req-old").status, STATUS.SUPERSEDED);
+  assert.equal(service.pendingRequestByChat.has("oc-chat"), false);
+  assert.equal(service.batches.get("oc-chat").latestMessage.messageId, "om-new");
+  assert.equal(store.entries.some((log) => log.event === "superseded_notification_failed"), true);
+});
+
+test("PersonalWatchService does not mark a superseded draft as failed when expiration notification fails", async () => {
+  const store = new MemoryApprovalStore();
+  const service = new PersonalWatchService({
+    store,
+    imClient: {
+      async listP2pMessages() {
+        return [];
+      }
+    },
+    bridge: {
+      async handleLarkMessage() {
+        return { text: "旧建议", channel: "codex" };
+      }
+    },
+    approvalSurface: {
+      async notifyExpired() {
+        throw new Error("desktop unavailable");
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }],
+      fallbackLarkBot: false
+    }
+  });
+  service.batches.set("oc-chat", {
+    listener: { chatId: "oc-chat" },
+    messages: [],
+    latestMessage: {
+      messageId: "om-newer",
+      createdAt: "1779811201000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "新消息"
+    },
+    updatedAtMs: 0,
+    dirty: true
+  });
+
+  await service.processBatch({
+    chatKey: "oc-chat",
+    batch: {
+      listener: { chatId: "oc-chat" },
+      messages: [],
+      latestMessage: {
+        messageId: "om-old",
+        createdAt: "1779811200000",
+        senderId: "ou-target",
+        messageType: "text",
+        text: "旧消息"
+      },
+      updatedAtMs: 0,
+      dirty: false
+    }
+  });
+
+  const request = [...store.records.values()].find((record) => record.messageId === "om-old");
+  assert.equal(request.status, STATUS.SUPERSEDED);
+  assert.equal(request.errorMessage, undefined);
+  assert.equal(store.entries.some((log) => log.event === "superseded_notification_failed"), true);
+});
+test("PersonalWatchService notifies approval surface when pending request is superseded by a new message", async () => {
+  const expired = [];
+  const store = new MemoryApprovalStore();
+  store.create({
+    id: "req-old",
+    status: STATUS.PENDING_APPROVAL,
+    messageId: "om-old",
+    draftText: "旧建议"
+  });
+  const service = new PersonalWatchService({
+    store,
+    imClient: {},
+    bridge: {},
+    approvalSurface: {
+      async notifyExpired(requestId, request) {
+        expired.push({ requestId, request });
+      }
+    },
+    config: {
+      targetListeners: [{ chatId: "oc-chat" }]
+    }
+  });
+  service.pendingRequestByChat.set("oc-chat", "req-old");
+
+  await service.queueMessage({
+    listener: { chatId: "oc-chat" },
+    message: {
+      messageId: "om-new",
+      createdAt: "1779811200000",
+      senderId: "ou-target",
+      messageType: "text",
+      text: "新消息"
+    }
+  });
+
+  assert.equal(store.get("req-old").status, STATUS.SUPERSEDED);
+  assert.deepEqual(expired, [
+    {
+      requestId: "req-old",
+      request: {
+        id: "req-old",
+        status: STATUS.SUPERSEDED,
+        messageId: "om-old",
+        draftText: "旧建议",
+        supersededByMessageId: "om-new"
+      }
+    }
+  ]);
+});
+
 test("PersonalWatchService polls configured chat ids and skips owner messages", async () => {
   const handled = [];
   const store = new MemoryApprovalStore();
@@ -484,6 +1028,7 @@ test("PersonalWatchService rejects sending superseded drafts", async () => {
 
 test("PersonalWatchService rewrites a pending draft from bot confirmation text", async () => {
   const notifications = [];
+  const handled = [];
   const store = new MemoryApprovalStore();
   store.create({
     id: "req-1",
@@ -491,8 +1036,11 @@ test("PersonalWatchService rewrites a pending draft from bot confirmation text",
     eventId: "poll-1",
     messageId: "om-source",
     senderId: "ou-target",
+    selfUserId: "ou-me",
     text: "帮我看一下",
     draftText: "可以",
+    contextMessages: [{ messageId: "om-context", text: "前文", messageType: "text" }],
+    contextMaxChars: 1200,
     contextSummary: "对方希望你帮忙看一下材料。",
     channel: "codex"
   });
@@ -506,6 +1054,7 @@ test("PersonalWatchService rewrites a pending draft from bot confirmation text",
     },
     bridge: {
       async handleLarkMessage(message) {
+        handled.push(message);
         return { text: `改后：${message.rewriteInstruction}`, channel: "codex" };
       }
     },
@@ -521,6 +1070,9 @@ test("PersonalWatchService rewrites a pending draft from bot confirmation text",
   });
 
   assert.equal(result.status, STATUS.PENDING_APPROVAL);
+  assert.deepEqual(handled[0].contextMessages, [{ messageId: "om-context", text: "前文", messageType: "text" }]);
+  assert.equal(handled[0].contextMaxChars, 1200);
+  assert.equal(handled[0].selfUserId, "ou-me");
   assert.equal(store.get("req-1").draftText, "改后：更短一点");
   assert.equal(store.get("req-1").approvalMessageId, "om-notify-2");
   assert.match(notifications[0].markdown, /Rewritten as requested/);

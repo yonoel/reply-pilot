@@ -94,9 +94,17 @@ export class LarkCliEventSource {
       if (!line.trim()) {
         continue;
       }
-      const event = JSON.parse(line);
-      const message = parseLarkCliMessageEvent(event);
-      Promise.resolve(this.onMessage(message));
+      let message;
+      try {
+        const event = JSON.parse(line);
+        message = parseLarkCliMessageEvent(event);
+      } catch (error) {
+        console.warn(`lark cli event skipped: ${error.message}`);
+        continue;
+      }
+      Promise.resolve(this.onMessage(message)).catch((error) => {
+        console.error(`lark cli event handler failed: ${error.message}`);
+      });
     }
   }
 }

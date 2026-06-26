@@ -9,6 +9,12 @@
     "cli": "node src/cli.js",
     "watch": "node src/cli.js watch",
     "poll-once": "node src/cli.js poll-once",
+    "sync:desktop-rules": "node scripts/sync-desktop-rules.js",
+    "predesktop:dev": "npm run sync:desktop-rules",
+    "desktop:dev": "tauri dev",
+    "predesktop:build": "npm run sync:desktop-rules",
+    "desktop:build": "tauri build",
+    "pretest": "npm run sync:desktop-rules",
     "test": "npm run typecheck && node --test tests/**/*.test.js",
     "typecheck": "tsc --noEmit"
   },
@@ -16,6 +22,7 @@
     "node": ">=22"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^25.9.1",
     "typescript": "^6.0.3"
   }

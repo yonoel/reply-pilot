@@ -45,6 +45,32 @@ test("initProjectConfig creates project local config with default watch and herm
   }
 });
 
+test("project config includes desktop pet and approval defaults", () => {
+  const config = createDefaultProjectConfig();
+
+  assert.deepEqual(config.desktop, {
+    enabled: true,
+    theme: "pixel",
+    position: {
+      mode: "free",
+      x: 1320,
+      y: 820,
+      corner: "bottom-right"
+    },
+    alwaysOnTop: true,
+    scale: 1,
+    doNotDisturb: false,
+    showSystemNotification: true,
+    apiPort: 3017
+  });
+  assert.deepEqual(config.approval, {
+    primarySurface: "desktop-pet",
+    fallbackLarkBot: true,
+    instructionMode: "rules",
+    allowDirectSendByInstruction: true
+  });
+});
+
 test("loadProjectConfig normalizes the old hidden prompt path to project prompt.md", () => {
   const cwd = mkdtempSync(join(tmpdir(), "reply-pilot-config-"));
   try {

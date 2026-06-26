@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,6 +7,9 @@ import { promisify } from "node:util";
 
 import { createAgentBridge } from "./agent/agent-bridge.js";
 import { createAgentChannel } from "./agent/channel-registry.js";
+import { createApprovalController } from "./approval/approval-controller.js";
+import { DesktopApprovalSurface } from "./approval/desktop-approval-surface.js";
+import { LarkBotApprovalSurface } from "./approval/lark-bot-approval-surface.js";
 import {
   addListener,
   initProjectConfig,
@@ -19,6 +23,9 @@ import {
   setOwnerUser,
   validateRuntimeConfig
 } from "./config/project-config.js";
+import { createDesktopApiServer } from "./desktop/desktop-api-server.js";
+import { ensureDesktopApiToken, loadDesktopConfig, saveDesktopConfig } from "./desktop/desktop-config.js";
+import { DesktopEventBus } from "./desktop/desktop-event-bus.js";
 import { LarkCliEventSource } from "./lark/lark-cli-event-source.js";
 import { LarkCliContactClient } from "./lark/lark-cli-contact-client.js";
 import { LarkCliImClient } from "./lark/lark-cli-im-client.js";
@@ -54,7 +61,10 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
       return handleChannels(argv[1], argv[2], argv.slice(3), io);
     }
     if (group === "watch") {
-      return await handleWatch(io);
+      return await handleWatch(io, argv.slice(1));
+    }
+    if (group === "desktop-api") {
+      return await handleDesktopApi(io);
     }
     if (group === "poll-once") {
       return await handlePollOnce(io);
@@ -158,20 +168,43 @@ function handleChannels(subcommand, action, args, io) {
 async function handlePollOnce(io) {
   const config = loadProjectConfig({ cwd: io.cwd });
   validateRuntimeConfig(config);
-  const service = createWatchService(config, io);
+  const { service } = createWatchService(config, io);
   const result = await service.pollOnce();
   io.stdout(`poll-once complete processed=${result.processed}`);
   return { exitCode: 0 };
 }
 
-async function handleWatch(io) {
+async function handleWatch(io, args = []) {
   const config = loadProjectConfig({ cwd: io.cwd });
   validateRuntimeConfig(config);
-  const service = createWatchService(config, io);
-  service.start();
-  const eventSource = createConfirmationEventSource(service, io);
-  await eventSource.start();
+  const desktop = args.includes("--desktop");
+  const serviceBundle = createWatchService(config, io, { desktopSurface: desktop });
+  if (desktop && serviceBundle.apiServer) {
+    await serviceBundle.apiServer.listen(config.desktop?.apiPort ?? 3017);
+    io.stdout(`desktop-api started port=${serviceBundle.apiServer.port}`);
+  }
+  try {
+    serviceBundle.service.start();
+    const eventSource = createConfirmationEventSource(serviceBundle.service, io);
+    await eventSource.start();
+  } catch (error) {
+    serviceBundle.service.stop?.();
+    await serviceBundle.apiServer?.close();
+    throw error;
+  }
   io.stdout("watch started");
+  return { exitCode: 0 };
+}
+
+async function handleDesktopApi(io) {
+  const config = loadProjectConfig({ cwd: io.cwd });
+  validateRuntimeConfig(config);
+  const serviceBundle = createWatchService(config, io, { desktopSurface: true });
+  if (!serviceBundle.apiServer) {
+    throw new Error("desktop api server unavailable");
+  }
+  await serviceBundle.apiServer.listen(config.desktop?.apiPort ?? 3017);
+  io.stdout(`desktop-api started port=${serviceBundle.apiServer.port}`);
   return { exitCode: 0 };
 }
 
@@ -336,11 +369,17 @@ async function resolveChatListenerName({ listener, config, io }) {
   }
 }
 
-function createWatchService(config, io) {
+function createWatchService(config, io, options = {}) {
+  const eventBus = options.desktopSurface ? new DesktopEventBus() : undefined;
+
   if (io.createPersonalWatchService) {
-    return io.createPersonalWatchService({
-      config: personalWatchConfig(config)
+    const approvalSurface = options.desktopSurface ? new DesktopApprovalSurface({ eventBus }) : undefined;
+    const service = io.createPersonalWatchService({
+      config: personalWatchConfig(config),
+      approvalSurface,
+      approvalController: undefined
     });
+    return { service, eventBus, approvalSurface, approvalController: undefined, apiServer: undefined };
   }
 
   const store = createStore(config, io.cwd);
@@ -360,14 +399,51 @@ function createWatchService(config, io) {
   const contactClient = new LarkCliContactClient({
     runCommand: io.runCommand
   });
-  return new PersonalWatchService({
+  const approvalController = createApprovalController({
+    store,
+    imClient,
+    bridge,
+    config: approvalControllerConfig(config),
+    eventBus
+  });
+  const larkBotApprovalSurface =
+    config.approval?.fallbackLarkBot !== false
+      ? new LarkBotApprovalSurface({
+          imClient,
+          contactClient,
+          config: personalWatchConfig(config)
+        })
+      : undefined;
+  const approvalSurface = options.desktopSurface
+    ? new DesktopApprovalSurface({ eventBus })
+    : larkBotApprovalSurface;
+  const fallbackApprovalSurface = options.desktopSurface ? larkBotApprovalSurface : undefined;
+  const service = new PersonalWatchService({
     store,
     imClient,
     contactClient,
     bridge,
+    approvalController,
+    approvalSurface,
+    fallbackApprovalSurface,
     config: personalWatchConfig(config),
     configProvider: () => personalWatchConfig(loadProjectConfig({ cwd: io.cwd }))
   });
+  const desktopBootstrapToken =
+    process.env.REPLY_PILOT_DESKTOP_BOOTSTRAP_TOKEN || `rpb_${crypto.randomBytes(24).toString("base64url")}`;
+  const apiServer = options.desktopSurface
+    ? createDesktopApiServer({
+        controller: approvalController,
+        eventBus,
+        apiToken: ensureDesktopApiToken({ cwd: io.cwd }),
+        sessionBootstrapToken: desktopBootstrapToken,
+        desktopConfig: {
+          load: () => loadDesktopConfig({ cwd: io.cwd }),
+          save: (desktopConfig) => saveDesktopConfig(desktopConfig, { cwd: io.cwd })
+        }
+      })
+    : undefined;
+  return { service, store, approvalController, approvalSurface, eventBus, apiServer, desktopBootstrapToken };
 }
 
 function createConfirmationEventSource(service, io) {
@@ -396,7 +472,15 @@ function personalWatchConfig(config) {
     contextLookbackMinutes: config.context.lookbackMinutes,
     contextMaxChars: config.context.maxChars,
     notifyAs: config.watch.notifyAs,
-    replyAs: config.watch.replyAs
+    replyAs: config.watch.replyAs,
+    fallbackLarkBot: config.approval?.fallbackLarkBot !== false
+  };
+}
+
+function approvalControllerConfig(config) {
+  return {
+    ...personalWatchConfig(config),
+    approval: config.approval ?? {}
   };
 }
 
@@ -463,6 +547,8 @@ function helpText() {
     "  channels set ollama [--command ollama] --model <model>",
     "  channels show",
     "  watch",
+    "  watch --desktop",
+    "  desktop-api",
     "  poll-once",
     "  logs list [--limit 20]",
     "  logs show --request-id <req_xxx>",

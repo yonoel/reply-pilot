@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReplyPilot</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="pet" class="pet-shell state-idle" data-tauri-drag-region>
+      <section class="card" id="approval-card" hidden>
+        <div class="row">
+          <span class="label">发件人</span>
+          <strong id="sender">-</strong>
+        </div>
+        <div class="row">
+          <span class="label">原始消息</span>
+          <p id="source-text"></p>
+        </div>
+        <div class="row draft-row">
+          <span class="label">建议回复</span>
+          <p id="draft-text"></p>
+          <button id="copy-draft" type="button">复制</button>
+        </div>
+        <form id="instruction-form" class="instruction">
+          <input id="instruction" name="instruction" placeholder="告诉我怎么处理..." autocomplete="off" />
+          <button type="submit" aria-label="提交指令">›</button>
+        </form>
+        <p id="helper" class="helper"></p>
+        <div class="actions">
+          <button id="send" type="button">发送</button>
+          <button id="ignore" type="button">忽略</button>
+        </div>
+      </section>
+      <button id="sprite" class="sprite" type="button" aria-label="ReplyPilot" data-tauri-drag-region>
+        <span class="antenna" data-tauri-drag-region></span>
+        <span class="face" data-tauri-drag-region><span class="eye"></span><span class="eye"></span></span>
+        <span class="mouth" data-tauri-drag-region></span>
+        <span id="badge" class="badge" hidden>1</span>
+      </button>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
